@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Server" type="CMakeRunConfiguration" factoryName="Application" PROGRAM_PARAMS="label /bin/bash -i" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="pms" TARGET_NAME="untitled5" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="pms" RUN_TARGET_NAME="untitled5">
+    <method v="2">
+      <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+    </method>
+  </configuration>
+</component>
