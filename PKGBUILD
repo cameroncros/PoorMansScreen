@@ -7,23 +7,24 @@ arch=('x86_64' 'arm64')
 url="https://github.com/cameroncros/PoorMansScreen"
 license=('MIT' 'custom')
 depends=()
-makedepends=('rust')
-source=("$pkgname-$pkgver.tar.gz::https://github.com/cameroncros/$pkgname/archive/$pkgver.tar.gz")
+makedepends=('rust' 'git')
+source=("$pkgname::git+https://github.com/cameroncros/$pkgname#branch=main")
+sha256sums=('SKIP')
 
 build() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname"
 
   cargo build --release --locked
 }
 
 check() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname"
 
   cargo test --release --locked
 }
 
 package() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname"
 
   install -Dm755 "target/release/pms" "$pkgdir/usr/bin/pms"
 }
