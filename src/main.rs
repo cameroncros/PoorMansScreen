@@ -1,6 +1,5 @@
 use std::{env, thread};
 use std::io::{Read, stderr, stdin, stdout, Write};
-use std::net::Shutdown;
 use std::os::unix::net::{UnixDatagram};
 use std::path::Path;
 use std::process::{Command, exit, Stdio};
@@ -24,10 +23,6 @@ impl ReadableUnixDatagram {
             }
             Err(e) => {return Err(e)}
         }
-    }
-
-    pub fn shutdown(&self, how: Shutdown) -> std::io::Result<()> {
-        self.unixdatagram.shutdown(how)
     }
 }
 
@@ -79,9 +74,9 @@ fn run_process(label: &String, cmd: &[String]) {
     }
     let mut child = command.spawn().expect("Failed to start child process");
 
-    let mut child_stdin = child.stdin.take().expect("Failed to open stdin");
-    let mut child_stdout = child.stdout.take().expect("Failed to open stdout");
-    let mut child_stderr = child.stderr.take().expect("Failed to open stderr");
+    let child_stdin = child.stdin.take().expect("Failed to open stdin");
+    let child_stdout = child.stdout.take().expect("Failed to open stdout");
+    let child_stderr = child.stderr.take().expect("Failed to open stderr");
 
     fn communicate(
         mut stream: impl Read,
