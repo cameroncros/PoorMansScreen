@@ -1,7 +1,19 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Client" type="CMakeRunConfiguration" factoryName="Application" singleton="false" PROGRAM_PARAMS="label" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="pms" TARGET_NAME="untitled5" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="pms" RUN_TARGET_NAME="untitled5">
+  <configuration default="false" name="Client" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+    <option name="command" value="run --package poormansscreen --bin poormansscreen label" />
+    <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+    <option name="emulateTerminal" value="false" />
+    <option name="channel" value="DEFAULT" />
+    <option name="requiredFeatures" value="true" />
+    <option name="allFeatures" value="false" />
+    <option name="withSudo" value="false" />
+    <option name="buildTarget" value="REMOTE" />
+    <option name="backtrace" value="SHORT" />
+    <envs />
+    <option name="isRedirectInput" value="false" />
+    <option name="redirectInputPath" value="" />
     <method v="2">
-      <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
     </method>
   </configuration>
 </component>
