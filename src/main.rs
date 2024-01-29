@@ -30,7 +30,7 @@ fn socket_path(label: &String) -> String
 {
     return format!("/tmp/{label}")
 }
-fn connect_process(label: &String, stdin: &mut dyn Read)
+fn connect_process(label: &String, stdin: &mut dyn Read) -> Result<(), String>
 {
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
@@ -42,19 +42,16 @@ fn connect_process(label: &String, stdin: &mut dyn Read)
     loop
     {
         let buffer : &mut [u8;10000] = &mut [0u8;10000];
-        match stdin.read(buffer) {
-            Ok(size) => {
-                if size == 0 {
-                    break;
-                }
-                sock.send(&buffer[0..size]).unwrap();
-            }
-            Err(_) => break
+        let size = stdin.read(buffer).expect("Failed to read from stdin");
+        if size == 0 {
+            break;
         }
+        sock.send(&buffer[0..size]).expect("Failed to send to unix socket");
     }
+    Ok(())
 }
 
-fn run_process(label: &String, cmd: &[String]) {
+fn run_process(label: &String, cmd: &[String]) -> Result<(), ()> {
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
     if socket.exists() {
@@ -81,29 +78,24 @@ fn run_process(label: &String, cmd: &[String]) {
     fn communicate(
         mut stream: impl Read,
         mut output: impl Write,
-    ) -> std::io::Result<()> {
+    ) {
         let mut buf = [0u8; 1024];
         loop {
-            let num_read = stream.read(&mut buf)?;
+            let num_read = stream.read(&mut buf).expect("Failed to read from unix socket");
             if num_read == 0 {
                 break;
             }
-            let buf = &buf[..num_read];
-            output.write_all(buf)?;
+            output.write_all(&buf[0..num_read]).expect("Failed to write to process");
         }
-        Ok(())
     }
     let thread_out = thread::spawn(move || {
         communicate(child_stdout, stdout())
-            .expect("error communicating with child stdout")
     });
     let thread_err = thread::spawn(move || {
         communicate(child_stderr, stderr())
-            .expect("error communicating with child stderr")
     });
     thread::spawn(move || {
         communicate(stream, child_stdin)
-            .expect("error communicating with child stderr")
     });
     thread_out.join().unwrap();
     thread_err.join().unwrap();
@@ -130,11 +122,11 @@ fn main() {
     }
     let label = args.get(1).unwrap();
     if n_args == 2 {
-        connect_process(label, &mut stdin());
+        connect_process(label, &mut stdin()).unwrap();
         exit(0);
     }
     if n_args >= 3 {
-        run_process(label, &args[2..]);
+        run_process(label, &args[2..]).unwrap();
         exit(0);
     }
 }
@@ -142,6 +134,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::{thread, time};
+    use std::path::Path;
     use fork::fork;
     use fork::Fork::{Child, Parent};
     use nix::sys::wait::waitpid;
@@ -149,25 +142,37 @@ mod tests {
     use crate::{connect_process, run_process};
 
     #[test]
+    #[should_panic]
+    fn test_no_process() {
+        let socket = Path::new("label");
+        if socket.exists() {
+            std::fs::remove_file(socket).expect("Failed to remove existing unix socket")
+        }
+        let cmd = String::from("ls\n");
+        let mut stream = cmd.as_bytes();
+        connect_process(&String::from("label"), &mut stream).unwrap();
+    }
+
+    #[test]
     fn test_end_to_end() {
         match fork().expect("Failed to fork") {
             Child => {
-                run_process(&String::from("label"), &[String::from("/bin/bash"), String::from("-i")])
+                run_process(&String::from("label"), &[String::from("/bin/bash"), String::from("-i")]).unwrap()
             }
             Parent(pid) => {
                 thread::sleep(time::Duration::from_secs(1));
                 {
                     let cmd = String::from("ls\n");
                     let mut stream = cmd.as_bytes();
-                    connect_process(&String::from("label"), &mut stream);
+                    connect_process(&String::from("label"), &mut stream).unwrap();
                 }
                 {
                     let cmd = String::from("exit\n");
                     let mut stream = cmd.as_bytes();
-                    connect_process(&String::from("label"), &mut stream);
+                    connect_process(&String::from("label"), &mut stream).unwrap();
                 }
                 println!("Waiting for process");
-                waitpid(Option::from(Pid::from_raw(pid)), None).expect("TODO: panic message");
+                waitpid(Option::from(Pid::from_raw(pid)), None).unwrap();
             }
         }
     }
