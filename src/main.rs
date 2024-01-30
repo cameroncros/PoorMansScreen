@@ -100,6 +100,7 @@ fn run_process(label: &String, cmd: &[String]) -> Result<(), ()> {
     thread_out.join().unwrap();
     thread_err.join().unwrap();
     // Dont bother closing stdin thread, just exit.
+    std::fs::remove_file(socket).expect("Failed to cleanup our socket when we finished with it");
     exit(0);
 }
 
@@ -139,41 +140,56 @@ mod tests {
     use fork::Fork::{Child, Parent};
     use nix::sys::wait::waitpid;
     use nix::unistd::Pid;
-    use crate::{connect_process, run_process};
+    use crate::{connect_process, run_process, socket_path};
+    use rand::Rng;
+    use serial_test::serial;
+
+    fn rand_label() -> String {
+        let mut rng = rand::thread_rng();
+        let n1: u32 = rng.gen();
+        println!("Label: [{n1}]");
+        return format!("{n1}");
+    }
 
     #[test]
+    #[serial]
     #[should_panic]
     fn test_no_process() {
-        let socket = Path::new("label");
+        let label = rand_label();
+        let socket = Path::new(&label);
         if socket.exists() {
             std::fs::remove_file(socket).expect("Failed to remove existing unix socket")
         }
         let cmd = String::from("ls\n");
         let mut stream = cmd.as_bytes();
-        connect_process(&String::from("label"), &mut stream).unwrap();
+        connect_process(&label, &mut stream).unwrap();
     }
 
     #[test]
+    #[serial]
     fn test_end_to_end() {
+        let label = rand_label();
         match fork().expect("Failed to fork") {
             Child => {
-                run_process(&String::from("label"), &[String::from("/bin/bash"), String::from("-i")]).unwrap()
+                run_process(&label, &[String::from("/bin/bash"), String::from("-i")]).unwrap()
             }
             Parent(pid) => {
                 thread::sleep(time::Duration::from_secs(1));
                 {
                     let cmd = String::from("ls\n");
                     let mut stream = cmd.as_bytes();
-                    connect_process(&String::from("label"), &mut stream).unwrap();
+                    connect_process(&label, &mut stream).unwrap();
                 }
                 {
                     let cmd = String::from("exit\n");
                     let mut stream = cmd.as_bytes();
-                    connect_process(&String::from("label"), &mut stream).unwrap();
+                    connect_process(&label, &mut stream).unwrap();
                 }
                 println!("Waiting for process");
                 waitpid(Option::from(Pid::from_raw(pid)), None).unwrap();
             }
         }
+        let path = socket_path(&label);
+        assert_eq!(false, Path::new(&path).exists());
     }
 }
