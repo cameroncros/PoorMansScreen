@@ -1,105 +1,105 @@
-use std::{env, thread};
+use std::{env, io, thread};
 use std::io::{Read, stderr, stdin, stdout, Write};
-use std::os::unix::net::{UnixDatagram};
+use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::process::{Command, exit, Stdio};
 
-struct ReadableUnixDatagram {
+struct RWUnixDatagram {
     unixdatagram: UnixDatagram
 }
 
-impl Read for ReadableUnixDatagram {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        return self.unixdatagram.recv(buf)
+impl Read for RWUnixDatagram {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.unixdatagram.recv(buf)
     }
 }
 
-impl ReadableUnixDatagram {
-    pub fn bind<P: AsRef<Path>>(path: P) -> std::io::Result<ReadableUnixDatagram> {
+impl Write for RWUnixDatagram {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.unixdatagram.send(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl RWUnixDatagram {
+    pub fn unbound() -> io::Result<RWUnixDatagram> {
+        Ok(RWUnixDatagram {
+            unixdatagram: UnixDatagram::unbound()?
+        })
+    }
+    
+    pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<RWUnixDatagram> {
         match UnixDatagram::bind(path) {
             Ok(ud) => {
-                let rud = ReadableUnixDatagram { unixdatagram: ud };
-                return Ok(rud)
+                Ok(RWUnixDatagram { unixdatagram: ud })
             }
-            Err(e) => {return Err(e)}
+            Err(e) => { Err(e) }
         }
+    }
+
+    pub fn connect<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        self.unixdatagram.connect(path)
     }
 }
 
-fn socket_path(label: &String) -> String
+
+fn socket_path(label: &str) -> String
 {
-    return format!("/tmp/{label}")
+    format!("/tmp/{label}")
 }
-fn connect_process(label: &String, stdin: &mut dyn Read) -> Result<(), String>
+
+fn connect_process(label: &str, stdin: &mut dyn Read) -> io::Result<()>
 {
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
 
     // Connect to socket
-    let sock = UnixDatagram::unbound().expect("Failed to create unix socket");
-    sock.connect(&socket).expect("Failed to connect to unix socket");
+    let mut sock = RWUnixDatagram::unbound().expect("Failed to create unix socket");
+    sock.connect(socket).expect("Failed to connect to unix socket");
 
-    loop
-    {
-        let buffer : &mut [u8;10000] = &mut [0u8;10000];
-        let size = stdin.read(buffer).expect("Failed to read from stdin");
-        if size == 0 {
-            break;
-        }
-        sock.send(&buffer[0..size]).expect("Failed to send to unix socket");
-    }
+    std::io::copy(stdin, &mut sock).expect("Failed to write to socket");
     Ok(())
 }
 
-fn run_process(label: &String, cmd: &[String]) -> Result<(), ()> {
+fn run_process(label: &str, cmd: &[String]) -> io::Result<()>{
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
     if socket.exists() {
         std::fs::remove_file(socket).expect("Failed to remove existing unix socket")
     }
-    let stream = match ReadableUnixDatagram::bind(&socket) {
+    let mut stream = match RWUnixDatagram::bind(socket) {
         Err(_) => panic!("Failed to create unix socket"),
         Ok(stream) => stream,
     };
 
-    let exe = cmd.get(0).unwrap();
+    let exe = cmd.first().unwrap();
     let args = &cmd[1..];
     let mut command = Command::new(exe);
     command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    if args.len() != 0 {
+    if !args.is_empty() {
         command.args(args);
     }
     let mut child = command.spawn().expect("Failed to start child process");
 
-    let child_stdin = child.stdin.take().expect("Failed to open stdin");
-    let child_stdout = child.stdout.take().expect("Failed to open stdout");
-    let child_stderr = child.stderr.take().expect("Failed to open stderr");
-
-    fn communicate(
-        mut stream: impl Read,
-        mut output: impl Write,
-    ) {
-        let mut buf = [0u8; 1024];
-        loop {
-            let num_read = stream.read(&mut buf).expect("Failed to read from unix socket");
-            if num_read == 0 {
-                break;
-            }
-            output.write_all(&buf[0..num_read]).expect("Failed to write to process");
-        }
-    }
+    let mut child_stdin = child.stdin.take().expect("Failed to open stdin");
+    let mut child_stdout = child.stdout.take().expect("Failed to open stdout");
+    let mut child_stderr = child.stderr.take().expect("Failed to open stderr");
+    
     let thread_out = thread::spawn(move || {
-        communicate(child_stdout, stdout())
+        std::io::copy(&mut child_stdout, &mut stdout()).unwrap();
     });
     let thread_err = thread::spawn(move || {
-        communicate(child_stderr, stderr())
+        std::io::copy(&mut child_stderr, &mut stderr()).unwrap();
     });
     thread::spawn(move || {
-        communicate(stream, child_stdin)
+        std::io::copy(&mut stream, &mut child_stdin).unwrap();
     });
     thread_out.join().unwrap();
     thread_err.join().unwrap();
-    // Dont bother closing stdin thread, just exit.
+    // Don't bother closing stdin thread, just exit.
     std::fs::remove_file(socket).expect("Failed to cleanup our socket when we finished with it");
     exit(0);
 }
@@ -116,7 +116,7 @@ fn main() {
     let n_args = env::args().count();
     let args: Vec<String> = env::args().map(|x| x.to_string())
         .collect();
-    let exe = args.get(0).unwrap();
+    let exe = args.first().unwrap();
 
     if n_args < 2 {
         print_help(exe);
@@ -148,7 +148,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let n1: u32 = rng.gen();
         println!("Label: [{n1}]");
-        return format!("{n1}");
+        format!("{n1}")
     }
 
     #[test]
@@ -190,6 +190,6 @@ mod tests {
             }
         }
         let path = socket_path(&label);
-        assert_eq!(false, Path::new(&path).exists());
+        assert!(Path::new(&path).exists());
     }
 }
