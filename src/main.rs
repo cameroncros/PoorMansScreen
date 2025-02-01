@@ -1,48 +1,23 @@
-use std::{env, io, thread};
-use std::io::{Read, stderr, stdin, stdout, Write};
-use std::os::unix::net::UnixDatagram;
+use clap::{CommandFactory, Parser};
+use rwunixdatagram::RWUnixDatagram;
+use std::io::{stderr, stdin, stdout, Read};
 use std::path::Path;
-use std::process::{Command, exit, Stdio};
+use std::process::{exit, Command, Stdio};
+use std::thread;
 
-struct RWUnixDatagram {
-    unixdatagram: UnixDatagram
-}
+mod rwunixdatagram;
 
-impl Read for RWUnixDatagram {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.unixdatagram.recv(buf)
-    }
-}
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(version, about, trailing_var_arg=true)]
+struct Args {
+    /// The tag/label
+    #[arg()]
+    tag: String,
 
-impl Write for RWUnixDatagram {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.unixdatagram.send(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl RWUnixDatagram {
-    pub fn unbound() -> io::Result<RWUnixDatagram> {
-        Ok(RWUnixDatagram {
-            unixdatagram: UnixDatagram::unbound()?
-        })
-    }
-    
-    pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<RWUnixDatagram> {
-        match UnixDatagram::bind(path) {
-            Ok(ud) => {
-                Ok(RWUnixDatagram { unixdatagram: ud })
-            }
-            Err(e) => { Err(e) }
-        }
-    }
-
-    pub fn connect<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
-        self.unixdatagram.connect(path)
-    }
+    /// The optional command
+    #[arg()]
+    cmd: Option<Vec<String>>,
 }
 
 
@@ -51,7 +26,7 @@ fn socket_path(label: &str) -> String
     format!("/tmp/{label}")
 }
 
-fn connect_process(label: &str, stdin: &mut dyn Read) -> io::Result<()>
+fn connect_process(label: &str, stdin: &mut dyn Read)
 {
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
@@ -61,10 +36,9 @@ fn connect_process(label: &str, stdin: &mut dyn Read) -> io::Result<()>
     sock.connect(socket).expect("Failed to connect to unix socket");
 
     std::io::copy(stdin, &mut sock).expect("Failed to write to socket");
-    Ok(())
 }
 
-fn run_process(label: &str, cmd: &[String]) -> io::Result<()>{
+fn run_process(label: &str, cmd: &[String]) {
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
     if socket.exists() {
@@ -101,48 +75,49 @@ fn run_process(label: &str, cmd: &[String]) -> io::Result<()>{
     thread_err.join().unwrap();
     // Don't bother closing stdin thread, just exit.
     std::fs::remove_file(socket).expect("Failed to cleanup our socket when we finished with it");
-    exit(0);
 }
 
-fn print_help(exe: &String) {
+fn print_help(exe: &str) {
     println!("{exe} has two modes, run mode and stdin mode.");
     println!();
     println!("Run mode: {exe} {{label}} {{program arguments}}");
     println!("Stdin mode: {exe} {{label}}");
-    exit(0);
+    println!();
 }
 
 fn main() {
-    let n_args = env::args().count();
-    let args: Vec<String> = env::args().map(|x| x.to_string())
-        .collect();
-    let exe = args.first().unwrap();
+    let args = match Args::try_parse() {
+        Ok(args) => args,
+        Err(_) => {
+            let cmd = Args::command();
+            let bin = cmd.get_bin_name().unwrap_or("pms");
+            print_help(bin);
+            println!("{}", Args::command().render_usage());
+            exit(1);
+        }
+    };
 
-    if n_args < 2 {
-        print_help(exe);
-    }
-    let label = args.get(1).unwrap();
-    if n_args == 2 {
-        connect_process(label, &mut stdin()).unwrap();
-        exit(0);
-    }
-    if n_args >= 3 {
-        run_process(label, &args[2..]).unwrap();
-        exit(0);
+    match args.cmd {
+        Some(cmd) => {
+            run_process(&args.tag, &cmd)
+        }
+        None => {
+            connect_process(&args.tag, &mut stdin())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, time};
-    use std::path::Path;
+    use crate::{connect_process, run_process, socket_path};
     use fork::fork;
     use fork::Fork::{Child, Parent};
     use nix::sys::wait::waitpid;
     use nix::unistd::Pid;
-    use crate::{connect_process, run_process, socket_path};
     use rand::Rng;
     use serial_test::serial;
+    use std::path::Path;
+    use std::{thread, time};
 
     fn rand_label() -> String {
         let mut rng = rand::thread_rng();
@@ -162,7 +137,19 @@ mod tests {
         }
         let cmd = String::from("ls\n");
         let mut stream = cmd.as_bytes();
-        connect_process(&label, &mut stream).unwrap();
+        connect_process(&label, &mut stream);
+    }
+
+    #[test]
+    #[serial]
+    fn test_short_process() {
+        let label = rand_label();
+        
+        run_process(&label, &[String::from("ls"), String::from("-l")]);
+
+        let path = socket_path(&label);
+        let socket = Path::new(&path);
+        assert_eq!(false, socket.exists());
     }
 
     #[test]
@@ -171,25 +158,33 @@ mod tests {
         let label = rand_label();
         match fork().expect("Failed to fork") {
             Child => {
-                run_process(&label, &[String::from("/bin/bash"), String::from("-i")]).unwrap()
+                run_process(&label, &[String::from("/bin/bash"), String::from("-i")])
             }
             Parent(pid) => {
-                thread::sleep(time::Duration::from_secs(1));
+                println!("PID: {pid}");
+                let path = socket_path(&label);
+                let socket = Path::new(&path);
+                loop {
+                    if socket.exists() {
+                        break;
+                    }
+                    thread::sleep(time::Duration::from_millis(100));
+                }
                 {
                     let cmd = String::from("ls\n");
                     let mut stream = cmd.as_bytes();
-                    connect_process(&label, &mut stream).unwrap();
+                    connect_process(&label, &mut stream);
                 }
                 {
                     let cmd = String::from("exit\n");
                     let mut stream = cmd.as_bytes();
-                    connect_process(&label, &mut stream).unwrap();
+                    connect_process(&label, &mut stream);
                 }
                 println!("Waiting for process");
                 waitpid(Option::from(Pid::from_raw(pid)), None).unwrap();
             }
         }
         let path = socket_path(&label);
-        assert!(Path::new(&path).exists());
+        assert!(!Path::new(&path).exists());
     }
 }
