@@ -1,11 +1,10 @@
 use clap::{CommandFactory, Parser};
-use rwunixdatagram::RWUnixDatagram;
-use std::io::{stderr, stdin, stdout, Read};
+use std::io::{stderr, stdin, stdout, Read, Write};
 use std::path::Path;
-use std::process::{exit, Command, Stdio};
-use std::thread;
-
-mod rwunixdatagram;
+use std::process::{exit, Stdio};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::process::Command;
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -26,29 +25,44 @@ fn socket_path(label: &str) -> String
     format!("/tmp/{label}")
 }
 
-fn connect_process(label: &str, stdin: &mut dyn Read)
+async fn connect_process(label: &str, stdin: &mut dyn Read)
 {
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
 
-    // Connect to socket
-    let mut sock = RWUnixDatagram::unbound().expect("Failed to create unix socket");
-    sock.connect(socket).expect("Failed to connect to unix socket");
-
-    std::io::copy(stdin, &mut sock).expect("Failed to write to socket");
+    match UnixStream::connect(socket).await {
+        Ok(mut sock) => {io_to_stream(stdin, &mut sock).await}
+        Err(e) => {
+            panic!("Unable to connect to socket - {e}");
+        }
+    }
 }
 
-fn run_process(label: &str, cmd: &[String]) {
+async fn io_to_stream(stdin: &mut dyn Read, sock: &mut UnixStream) {
+    loop {
+        let mut buf = [0u8; 1024];
+        match stdin.read(&mut buf) {
+            Ok(len) => {
+                if len == 0 {
+                    break;
+                }
+                sock.write_all(&buf[..len]).await.expect("Failed to write to unix socket");
+            }
+            Err(_) => {break}
+        }
+    }
+}
+
+async fn run_process(label: &str, cmd: &[String]) {
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
     if socket.exists() {
         std::fs::remove_file(socket).expect("Failed to remove existing unix socket")
     }
-    let mut stream = match RWUnixDatagram::bind(socket) {
+    let mut stream = match UnixListener::bind(socket) {
         Err(_) => panic!("Failed to create unix socket"),
         Ok(stream) => stream,
     };
-
     let exe = cmd.first().unwrap();
     let args = &cmd[1..];
     let mut command = Command::new(exe);
@@ -61,20 +75,50 @@ fn run_process(label: &str, cmd: &[String]) {
     let mut child_stdin = child.stdin.take().expect("Failed to open stdin");
     let mut child_stdout = child.stdout.take().expect("Failed to open stdout");
     let mut child_stderr = child.stderr.take().expect("Failed to open stderr");
+
+    let mut out = stdout();
+    let mut err = stderr();
     
-    let thread_out = thread::spawn(move || {
-        std::io::copy(&mut child_stdout, &mut stdout()).unwrap();
-    });
-    let thread_err = thread::spawn(move || {
-        std::io::copy(&mut child_stderr, &mut stderr()).unwrap();
-    });
-    thread::spawn(move || {
-        std::io::copy(&mut stream, &mut child_stdin).unwrap();
-    });
-    thread_out.join().unwrap();
-    thread_err.join().unwrap();
-    // Don't bother closing stdin thread, just exit.
+    tokio::select!{
+        () = read_proc(&mut child_stdout, &mut out)=> {println!("Stdout closed")},
+        () = read_proc(&mut child_stderr, &mut err) => {println!("Stderr closed")},
+        ()= write_proc(&mut stream, &mut child_stdin) => {println!("Stdin closed")},
+    }
+
+    println!("Process exited");
+
     std::fs::remove_file(socket).expect("Failed to cleanup our socket when we finished with it");
+}
+
+async fn write_proc<T: AsyncWrite + Unpin>(p0: &mut UnixListener, output: &mut T) {
+    loop {
+        let (mut client, _) = p0.accept().await.expect("Failed to accept client");
+        let mut buf = [0u8; 1024];
+        match client.read(&mut buf).await {
+            Ok(len) => {
+                if len == 0 {
+                    break;
+                }
+                output.write_all(&buf[..len]).await.expect("Failed to write");
+            }
+            Err(_) => {break}
+        }
+    }
+}
+
+async fn read_proc<T: AsyncRead + Unpin>(input: &mut T, output: &mut dyn Write) {
+    loop {
+        let mut buf = [0u8; 1024];
+        match input.read(&mut buf).await {
+            Ok(len) => {
+                if len == 0 {
+                    break;
+                }
+                output.write_all(&buf[..len]).expect("Failed to write");
+            }
+            Err(_) => {break}
+        }
+    }
 }
 
 fn print_help(exe: &str) {
@@ -85,7 +129,8 @@ fn print_help(exe: &str) {
     println!();
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(_) => {
@@ -99,10 +144,10 @@ fn main() {
 
     match args.cmd {
         Some(cmd) => {
-            run_process(&args.tag, &cmd)
+            run_process(&args.tag, &cmd).await
         }
         None => {
-            connect_process(&args.tag, &mut stdin())
+            connect_process(&args.tag, &mut stdin()).await
         }
     }
 }
@@ -110,26 +155,24 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::{connect_process, run_process, socket_path};
-    use fork::fork;
-    use fork::Fork::{Child, Parent};
-    use nix::sys::wait::waitpid;
-    use nix::unistd::Pid;
     use rand::Rng;
     use serial_test::serial;
     use std::path::Path;
-    use std::{thread, time};
+    use std::time;
+    use tokio::join;
+    use tokio::time::sleep;
 
     fn rand_label() -> String {
-        let mut rng = rand::thread_rng();
-        let n1: u32 = rng.gen();
+        let mut rng = rand::rng();
+        let n1: u32 = rng.random();
         println!("Label: [{n1}]");
         format!("{n1}")
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
     #[should_panic]
-    fn test_no_process() {
+    async fn test_no_process() {
         let label = rand_label();
         let socket = Path::new(&label);
         if socket.exists() {
@@ -137,54 +180,46 @@ mod tests {
         }
         let cmd = String::from("ls\n");
         let mut stream = cmd.as_bytes();
-        connect_process(&label, &mut stream);
+        connect_process(&label, &mut stream).await;
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_short_process() {
+    async fn test_short_process() {
         let label = rand_label();
-        
-        run_process(&label, &[String::from("ls"), String::from("-l")]);
+
+        run_process(&label, &[String::from("ls"), String::from("-l")]).await;
 
         let path = socket_path(&label);
         let socket = Path::new(&path);
-        assert_eq!(false, socket.exists());
+        assert!(!socket.exists());
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_end_to_end() {
+    async fn test_end_to_end() {
         let label = rand_label();
-        match fork().expect("Failed to fork") {
-            Child => {
-                run_process(&label, &[String::from("/bin/bash"), String::from("-i")])
-            }
-            Parent(pid) => {
-                println!("PID: {pid}");
-                let path = socket_path(&label);
-                let socket = Path::new(&path);
-                loop {
-                    if socket.exists() {
-                        break;
-                    }
-                    thread::sleep(time::Duration::from_millis(100));
-                }
-                {
-                    let cmd = String::from("ls\n");
-                    let mut stream = cmd.as_bytes();
-                    connect_process(&label, &mut stream);
-                }
-                {
-                    let cmd = String::from("exit\n");
-                    let mut stream = cmd.as_bytes();
-                    connect_process(&label, &mut stream);
-                }
-                println!("Waiting for process");
-                waitpid(Option::from(Pid::from_raw(pid)), None).unwrap();
-            }
+
+        async fn ls(label: &str) {
+            sleep(time::Duration::from_secs(1)).await;
+            let cmd = String::from("ls\n");
+            let mut stream = cmd.as_bytes();
+            connect_process(&label, &mut stream).await;
         }
-        let path = socket_path(&label);
-        assert!(!Path::new(&path).exists());
+
+        async fn exit(label: &str) {
+            sleep(time::Duration::from_secs(2)).await;
+            let cmd = String::from("exit\n");
+            let mut stream = cmd.as_bytes();
+            connect_process(&label, &mut stream).await;
+        }
+
+        let cmd = [String::from("bash"), String::from("-i")];
+
+        join!(
+            run_process(&label, &cmd),
+            ls(&label),
+            exit(&label)
+        );
     }
 }
