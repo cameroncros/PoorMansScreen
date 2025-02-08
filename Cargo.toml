@@ -8,12 +8,13 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.5.27", features = ["derive"] }
 tokio = { version = "1.43.0", features = ["full"] }
-tokio-macros = "2.5.0"
+prost = { version = "0.13.4", default-features = false, features = ["prost-derive"] }
+thiserror = "2.0.11"
+console-subscriber = "0.4.1"
 
 [dev-dependencies]
 rand = "0.9.0"
 serial_test = "3.1.1"
 
 [build-dependencies]
-protobuf-codegen = "3.7.1"
-protobuf-parse = "3.7.1"
+prost-build = "0.13.4"

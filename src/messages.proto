@@ -1,0 +1,16 @@
+syntax = "proto3";
+package PMS;
+
+message ProcOutput {
+    oneof output {
+        bytes stdout = 1;
+        bytes stderr = 2;
+    }
+}
+
+message ProcInput {
+    oneof input {
+        bytes data = 1;
+        uint32 signal = 2;
+    }
+}
