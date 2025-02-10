@@ -39,9 +39,20 @@ pub(crate) async fn run_process(label: &str, cmd: &[String]) -> Result<(), PMSSe
     let (mut i_s, mut i_r) = unbounded_channel();
 
     select! {
-        e = handle_connections(&stream, &mut o_r, &mut i_s) => {println!("Connections broke - {e:#?}")}
-        e = read_stdout(&mut child_stdout, &mut o_s)=> {println!("Stdout closed - {e:#?}")},
-        e = write_stdin(&mut i_r, &mut child_stdin) => {println!("Stdin closed - {e:#?}")},
+        e = handle_connections(&stream, &mut o_r, &mut i_s) => {
+            if e.is_err() {
+            println!("Connections broke - {e:#?}")}
+            }
+        e = read_stdout(&mut child_stdout, &mut o_s)=> {
+            if e.is_err() {
+                println!("Stdout closed - {e:#?}");
+            }
+        },
+        e = write_stdin(&mut i_r, &mut child_stdin) => {
+            if e.is_err() {
+                println!("Stdin closed - {e:#?}");
+            }
+        },
     }
 
     child
@@ -137,7 +148,7 @@ async fn read_stdout<T: AsyncRead + Unpin>(
     let mut buf = vec![0; 1024];
     while let Ok(len) = input.read(&mut buf).await {
         if len == 0 {
-            return Err(PMSServerError::InputInvalidLength);
+            return Ok(());
         }
         let msg = ProcOutput {
             stdout: buf[..len].to_vec(),

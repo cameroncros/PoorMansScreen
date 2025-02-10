@@ -8,8 +8,6 @@ pub enum PMSClientError {
     #[error("TODO")]
     OutputFailedToDecode(DecodeError),
     #[error("TODO")]
-    FailedReadMsgLength(std::io::Error),
-    #[error("TODO")]
     FailedReadMsg(std::io::Error),
     #[error("TODO")]
     FailedReadStdin(std::io::Error),
@@ -47,8 +45,6 @@ pub enum PMSServerError {
     InputFailedToSend(#[from] SendError<ProcInput>),
     #[error("TODO")]
     InputFailedToWrite(std::io::Error),
-    #[error("TODO")]
-    InputInvalidLength,
     #[error("TODO")]
     OutputFailedToSend(SendError<ProcOutput>),
     #[error("TODO")]

@@ -24,8 +24,16 @@ pub(crate) async fn connect_process<T: AsyncRead + Unpin>(
 
     let (mut r, mut w) = stream.split();
     select!(
-        e = handle_stdout(&mut r) => {println!("Stdout/err failed - {e:#?}")},
-        e = handle_stdin(&mut w, input) => {println!("Stdin failed - {e:#?}")},
+        e = handle_stdout(&mut r) => {
+            if e.is_err() {
+                println!("Stdout/err failed - {e:#?}");
+            }
+        },
+        e = handle_stdin(&mut w, input) => {
+            if e.is_err() {
+                println!("Stdin failed - {e:#?}")
+            }
+        }
     );
 
     Ok(())
@@ -33,10 +41,9 @@ pub(crate) async fn connect_process<T: AsyncRead + Unpin>(
 
 async fn handle_stdout(r: &mut ReadHalf<'_>) -> Result<(), PMSClientError> {
     loop {
-        let len = r
-            .read_u32()
-            .await
-            .map_err(PMSClientError::FailedReadMsgLength)?;
+        let Ok(len) = r.read_u32().await else {
+            return Ok(());
+        };
         let mut buf = vec![0; len as usize];
         r.read_exact(&mut buf)
             .await
