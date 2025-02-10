@@ -20,8 +20,6 @@ pub enum PMSClientError {
     #[error("TODO")]
     FailedWriteStdout(std::io::Error),
     #[error("TODO")]
-    FailedWriteStderr(std::io::Error),
-    #[error("TODO")]
     FailedConnect(std::io::Error),
 }
 
@@ -30,15 +28,9 @@ pub enum PMSServerError {
     #[error("TODO")]
     SocketAlreadyInUse,
     #[error("TODO")]
-    FailedToSpawnChild(std::io::Error),
+    FailedToSpawnChild(pty_process::Error),
     #[error("TODO")]
     FailedToBind(std::io::Error),
-    #[error("TODO")]
-    FailedTakeStdinPipe,
-    #[error("TODO")]
-    FailedTakeStdoutPipe,
-    #[error("TODO")]
-    FailedTakeStderrPipe,
     #[error("TODO")]
     FailedRemoveSocketFile(std::io::Error),
     #[error("TODO")]
@@ -62,7 +54,9 @@ pub enum PMSServerError {
     #[error("TODO")]
     OutputFailedToRead,
     #[error("TODO")]
-    OutputInvalidLength,
-    #[error("TODO")]
     FailedAcceptConnection(std::io::Error),
+    #[error("TODO")]
+    FailedCreatePTY(pty_process::Error),
+    #[error("TODO")]
+    FailedToWaitForChild(std::io::Error),
 }

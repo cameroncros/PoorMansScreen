@@ -1,17 +1,20 @@
 use crate::errors::PMSClientError;
 use crate::messages::proc_input::Input::Data;
-use crate::messages::proc_output::Output;
 use crate::messages::{ProcInput, ProcOutput};
 use crate::socket_path;
 use prost::Message;
+use std::io;
 use std::path::Path;
-use tokio::io::{stderr, stdin, stdout};
+use tokio::io::{stdout, AsyncRead};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::{ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
 use tokio::select;
 
-pub(crate) async fn connect_process(label: &str) -> Result<(), PMSClientError> {
+pub(crate) async fn connect_process<T: AsyncRead + Unpin>(
+    label: &str,
+    input: &mut T,
+) -> Result<(), PMSClientError> {
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
 
@@ -22,7 +25,7 @@ pub(crate) async fn connect_process(label: &str) -> Result<(), PMSClientError> {
     let (mut r, mut w) = stream.split();
     select!(
         e = handle_stdout(&mut r) => {println!("Stdout/err failed - {e:#?}")},
-        e = handle_stdin(&mut w) => {println!("Stdin failed - {e:#?}")},
+        e = handle_stdin(&mut w, input) => {println!("Stdin failed - {e:#?}")},
     );
 
     Ok(())
@@ -40,29 +43,28 @@ async fn handle_stdout(r: &mut ReadHalf<'_>) -> Result<(), PMSClientError> {
             .map_err(PMSClientError::FailedReadMsg)?;
 
         let msg = ProcOutput::decode(&*buf).map_err(PMSClientError::OutputFailedToDecode)?;
-        match msg.output {
-            None => {}
-            Some(out) => match out {
-                Output::Stdout(data) => stdout()
-                    .write_all(&data)
-                    .await
-                    .map_err(PMSClientError::FailedWriteStdout)?,
-                Output::Stderr(data) => stderr()
-                    .write_all(&data)
-                    .await
-                    .map_err(PMSClientError::FailedWriteStderr)?,
-            },
-        }
+        stdout()
+            .write_all(&msg.stdout)
+            .await
+            .map_err(PMSClientError::FailedWriteStdout)?;
     }
 }
 
-async fn handle_stdin(sock: &mut WriteHalf<'_>) -> Result<(), PMSClientError> {
+async fn handle_stdin<T: AsyncRead + Unpin>(
+    sock: &mut WriteHalf<'_>,
+    input: &mut T,
+) -> Result<(), PMSClientError> {
     loop {
         let mut buf = vec![0; 1024];
-        let len = stdin()
-            .read(&mut buf)
-            .await
-            .map_err(PMSClientError::FailedReadStdin)?;
+        let len = match input.read(&mut buf).await {
+            Ok(len) => len,
+            Err(e) => match e.kind() {
+                io::ErrorKind::Interrupted => {
+                    continue;
+                }
+                _ => return Err(PMSClientError::FailedReadStdin(e)),
+            },
+        };
         if len == 0 {
             continue;
         }

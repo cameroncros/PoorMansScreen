@@ -9,9 +9,13 @@ pub mod messages {
 use crate::client::connect_process;
 use crate::server::run_process;
 use clap::{CommandFactory, Parser};
-use std::process::exit;
+use std::env;
+use std::path::Path;
+use std::process::{exit, Command};
+use std::time::Duration;
+use tokio::io::stdin;
+use tokio::time::sleep;
 
-/// Simple program to greet a person
 #[derive(Parser, Debug)]
 #[command(version, about, trailing_var_arg = true)]
 struct Args {
@@ -36,6 +40,34 @@ fn print_help(exe: &str) {
     println!();
 }
 
+async fn fork_and_run(args: Args) {
+    let stage: u32 = env::var("PMS_STAGE")
+        .unwrap_or(String::from("0"))
+        .parse::<u32>()
+        .unwrap();
+    let exe = env::args().next().unwrap();
+    let child_cmd = args.cmd.unwrap();
+    let next_stage = (stage + 1).to_string();
+    let tag = args.tag.clone();
+
+    let mut next_args = vec![tag];
+    next_args.extend(child_cmd.clone());
+
+    let mut cmd = Command::new(exe);
+    cmd.args(&next_args);
+    cmd.env("PMS_STAGE", next_stage);
+
+    if stage == 0 {
+        let _ = cmd.spawn().unwrap().wait().unwrap();
+    } else if stage == 1 {
+        let _ = cmd.spawn().unwrap();
+        exit(0);
+    } else if stage == 2 {
+        run_process(&args.tag, &child_cmd).await.unwrap();
+        exit(0);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = match Args::try_parse() {
@@ -49,16 +81,28 @@ async fn main() {
         }
     };
 
-    match args.cmd {
-        Some(cmd) => {
-            // console_subscriber::init();
-            run_process(&args.tag, &cmd).await.unwrap()
+    let tag = args.tag.clone();
+
+    if args.cmd.is_some() {
+        fork_and_run(args).await;
+        let s_path = socket_path(&tag);
+        let s = Path::new(&s_path);
+        for _ in 0..5 {
+            if s.exists() {
+                break;
+            }
+            sleep(Duration::from_millis(1000)).await;
         }
-        None => {
-            console_subscriber::init();
-            connect_process(&args.tag).await.unwrap()
+        if !s.exists() {
+            println!("Child process didnt spawn?");
+            exit(1);
         }
     }
+
+    // console_subscriber::init();
+
+    connect_process(&tag, &mut stdin()).await.unwrap();
+
     exit(0);
 }
 
