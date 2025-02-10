@@ -73,7 +73,7 @@ async fn handle_stdin<T: AsyncRead + Unpin>(
             },
         };
         if len == 0 {
-            continue;
+            return Ok(());
         }
         let msg = ProcInput {
             input: Some(Data(buf[..len].to_vec())),

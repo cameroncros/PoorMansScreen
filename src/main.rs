@@ -40,30 +40,42 @@ fn print_help(exe: &str) {
     println!();
 }
 
-async fn fork_and_run(args: Args) {
+async fn wait_for_socket(tag: &str, timeout: u32) {
+    let s_path = socket_path(tag);
+    let s = Path::new(&s_path);
+    for _ in 0..timeout * 100 {
+        if s.exists() {
+            break;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    if !s.exists() {
+        println!("Child process didnt spawn?");
+        exit(1);
+    }
+}
+
+async fn fork_and_run(cmdline: &[String], args: &Args) {
     let stage: u32 = env::var("PMS_STAGE")
         .unwrap_or(String::from("0"))
         .parse::<u32>()
         .unwrap();
-    let exe = env::args().next().unwrap();
-    let child_cmd = args.cmd.unwrap();
     let next_stage = (stage + 1).to_string();
-    let tag = args.tag.clone();
 
-    let mut next_args = vec![tag];
-    next_args.extend(child_cmd.clone());
-
-    let mut cmd = Command::new(exe);
-    cmd.args(&next_args);
+    let mut cmd = Command::new(&cmdline[0]);
+    cmd.args(&cmdline[1..]);
     cmd.env("PMS_STAGE", next_stage);
 
     if stage == 0 {
         let _ = cmd.spawn().unwrap().wait().unwrap();
+        wait_for_socket(&args.tag.clone(), 5).await;
     } else if stage == 1 {
         let _ = cmd.spawn().unwrap();
         exit(0);
     } else if stage == 2 {
-        run_process(&args.tag, &child_cmd).await.unwrap();
+        run_process(&args.tag, &args.cmd.clone().unwrap())
+            .await
+            .unwrap();
         exit(0);
     }
 }
@@ -84,19 +96,8 @@ async fn main() {
     let tag = args.tag.clone();
 
     if args.cmd.is_some() {
-        fork_and_run(args).await;
-        let s_path = socket_path(&tag);
-        let s = Path::new(&s_path);
-        for _ in 0..5 {
-            if s.exists() {
-                break;
-            }
-            sleep(Duration::from_millis(1000)).await;
-        }
-        if !s.exists() {
-            println!("Child process didnt spawn?");
-            exit(1);
-        }
+        let cmdline = env::args().collect::<Vec<String>>();
+        fork_and_run(&cmdline, &args).await;
     }
 
     // console_subscriber::init();
@@ -110,12 +111,11 @@ async fn main() {
 mod tests {
     use crate::client::connect_process;
     use crate::server::run_process;
-    use crate::socket_path;
+    use crate::{fork_and_run, socket_path, Args};
     use rand::Rng;
     use serial_test::serial;
     use std::path::Path;
     use std::time;
-    use tokio::join;
     use tokio::time::sleep;
 
     fn rand_label() -> String {
@@ -158,22 +158,29 @@ mod tests {
     async fn test_end_to_end() {
         let label = rand_label();
 
-        async fn ls(label: &str) {
-            sleep(time::Duration::from_secs(1)).await;
-            let cmd = String::from("ls\n");
-            let mut stream = cmd.as_bytes();
-            connect_process(&label, &mut stream).await.unwrap();
-        }
+        let cmdline = vec![
+            String::from("cargo"),
+            String::from("run"),
+            label.clone(),
+            String::from("bash"),
+            String::from("-i"),
+        ];
 
-        async fn exit(label: &str) {
-            sleep(time::Duration::from_secs(2)).await;
-            let cmd = String::from("exit\n");
-            let mut stream = cmd.as_bytes();
-            connect_process(&label, &mut stream).await.unwrap();
-        }
+        let args = Args {
+            tag: label.clone(),
+            cmd: None,
+        };
 
-        let cmd = [String::from("bash"), String::from("-i")];
+        fork_and_run(&cmdline, &args).await;
 
-        let (_, (), ()) = join!(run_process(&label, &cmd), ls(&label), exit(&label));
+        sleep(time::Duration::from_secs(1)).await;
+        let cmd = String::from("ls\n");
+        let mut stream = cmd.as_bytes();
+        connect_process(&label, &mut stream).await.unwrap();
+
+        sleep(time::Duration::from_secs(1)).await;
+        let cmd = String::from("exit\n");
+        let mut stream = cmd.as_bytes();
+        connect_process(&label, &mut stream).await.unwrap();
     }
 }
