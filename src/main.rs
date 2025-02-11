@@ -10,11 +10,15 @@ use crate::client::connect_process;
 use crate::server::run_process;
 use clap::{CommandFactory, Parser};
 use std::env;
+use std::fs::OpenOptions;
 use std::path::Path;
 use std::process::{exit, Command};
 use std::time::Duration;
 use tokio::io::stdin;
 use tokio::time::sleep;
+use tracing::debug;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{fmt, Registry};
 
 #[derive(Parser, Debug)]
 #[command(version, about, trailing_var_arg = true)]
@@ -67,17 +71,36 @@ async fn fork_and_run(cmdline: &[String], args: &Args) {
     cmd.env("PMS_STAGE", next_stage);
 
     if stage == 0 {
+        debug!("Spawned stage 1");
         let _ = cmd.spawn().unwrap().wait().unwrap();
+        debug!("Stage 1 exited");
         wait_for_socket(&args.tag.clone(), 5).await;
     } else if stage == 1 {
         let _ = cmd.spawn().unwrap();
+        debug!("Spawned stage 2, exiting");
         exit(0);
     } else if stage == 2 {
-        run_process(&args.tag, &args.cmd.clone().unwrap())
-            .await
-            .unwrap();
+        debug!("Executing command");
+        if let Err(e) = run_process(&args.tag, &args.cmd.clone().unwrap()).await {
+            debug!("Process exited with error: {}", e);
+        };
+        debug!("Process exited");
         exit(0);
     }
+}
+
+fn setup_logging() {
+    let debug_file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open("/tmp/pms-debug.log")
+        .unwrap();
+    let subscriber = Registry::default().with(
+        // log-debug file, to log the debug
+        fmt::layer().with_writer(debug_file),
+    );
+
+    tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
 #[tokio::main]
@@ -96,8 +119,10 @@ async fn main() {
     let tag = args.tag.clone();
 
     if args.cmd.is_some() {
+        setup_logging();
         let cmdline = env::args().collect::<Vec<String>>();
         fork_and_run(&cmdline, &args).await;
+        // run_process(&tag, &args.cmd.unwrap()).await.unwrap();
     }
 
     // console_subscriber::init();

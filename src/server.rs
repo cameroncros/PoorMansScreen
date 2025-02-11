@@ -10,6 +10,7 @@ use tokio::net::unix::{ReadHalf, WriteHalf};
 use tokio::net::UnixListener;
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tracing::debug;
 
 pub(crate) async fn run_process(label: &str, cmd: &[String]) -> Result<(), PMSServerError> {
     let socket_path = socket_path(label);
@@ -41,24 +42,24 @@ pub(crate) async fn run_process(label: &str, cmd: &[String]) -> Result<(), PMSSe
     select! {
         e = handle_connections(&stream, &mut o_r, &mut i_s) => {
             if e.is_err() {
-            println!("Connections broke - {e:#?}")}
+                debug!("Connections broke - {e:#?}");
             }
+        },
         e = read_stdout(&mut child_stdout, &mut o_s)=> {
             if e.is_err() {
-                println!("Stdout closed - {e:#?}");
+                debug!("Stdout closed - {e:#?}");
             }
         },
         e = write_stdin(&mut i_r, &mut child_stdin) => {
             if e.is_err() {
-                println!("Stdin closed - {e:#?}");
+                debug!("Stdin closed - {e:#?}");
             }
         },
     }
 
-    child
-        .wait()
-        .await
-        .map_err(PMSServerError::FailedToWaitForChild)?;
+    if let Err(e) = child.wait().await {
+        debug!("Child exited - closed - {e:#?}");
+    };
 
     std::fs::remove_file(socket).map_err(PMSServerError::FailedRemoveSocketFile)
 }
@@ -103,16 +104,21 @@ async fn handle_connections(
     i_s: &mut UnboundedSender<ProcInput>,
 ) -> Result<(), PMSServerError> {
     loop {
-        let (mut client, _) = stream
-            .accept()
-            .await
-            .map_err(PMSServerError::FailedAcceptConnection)?;
+        debug!("Waiting for connection");
+        let (mut client, _) = match stream.accept().await {
+            Ok(v) => v,
+            Err(e) => {
+                debug!("Failed to accept connection: {e:#?}");
+                continue;
+            }
+        };
 
+        debug!("Waiting for connection");
         let (mut r, mut s) = client.split();
 
         select!(
-            e = sender(o_r, &mut s) => {println!("Sender closed - {e:#?}")},
-            e = receiver(&mut r, i_s) => {println!("Receiver closed - {e:#?}")},
+            e = sender(o_r, &mut s) => {debug!("Sender closed - {e:#?}")},
+            e = receiver(&mut r, i_s) => {debug!("Receiver closed - {e:#?}")},
         );
     }
 }
@@ -132,7 +138,7 @@ async fn write_stdin<T: AsyncWrite + Unpin>(
                         .map_err(PMSServerError::InputFailedToWrite)?;
                 }
                 Input::Signal(_) => {
-                    println!("Got signalled");
+                    debug!("Got signalled");
                     todo!();
                 }
             },
