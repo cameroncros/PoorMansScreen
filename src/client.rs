@@ -4,6 +4,7 @@ use crate::messages::proc_input::Input::Data;
 use crate::messages::{ProcInput, ProcOutput, Size};
 use crate::socket_path;
 use crossterm::terminal::size;
+use futures_util::stream::StreamExt;
 use prost::Message;
 use std::io;
 use std::path::Path;
@@ -12,6 +13,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::{ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
 use tokio::select;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+
+use signal_hook::consts::signal::*;
+use signal_hook_tokio::Signals;
 
 pub(crate) async fn connect_process<T: AsyncRead + Unpin>(
     label: &str,
@@ -24,21 +29,90 @@ pub(crate) async fn connect_process<T: AsyncRead + Unpin>(
         .await
         .map_err(PMSClientError::FailedConnect)?;
 
+    let signals = Signals::new(&[SIGWINCH]).map_err(PMSClientError::FailedSignalHandler)?;
+    let handle = signals.handle();
+
     let (mut r, mut w) = stream.split();
+
+    let (channel_in, mut channel_out) = unbounded_channel();
+    let channel_in2 = channel_in.clone();
+
     select!(
         e = handle_stdout(&mut r) => {
             if e.is_err() {
                 println!("Stdout/err failed - {e:#?}");
             }
         },
-        e = handle_stdin(&mut w, input) => {
+        e = handle_stdin(input, &channel_in) => {
             if e.is_err() {
                 println!("Stdin failed - {e:#?}")
             }
-        }
+        },
+        e = handle_signals(signals, &channel_in2) => {
+            if e.is_err() {
+                println!("Stdin failed - {e:#?}")
+            }
+        },
+        e = handle_send(&mut channel_out, &mut w) => {
+            if e.is_err() {
+                println!("Sender failed - {e:#?}");
+            }
+        },
     );
 
+    handle.close();
+
     Ok(())
+}
+
+async fn handle_send(
+    co: &mut UnboundedReceiver<ProcInput>,
+    sock: &mut WriteHalf<'_>,
+) -> Result<(), PMSClientError> {
+    loop {
+        match co.recv().await {
+            None => continue,
+            Some(msg) => {
+                sock.write_u32(msg.encoded_len() as u32)
+                    .await
+                    .map_err(PMSClientError::FailedWriteMsgLength)?;
+                sock.write_all(msg.encode_to_vec().as_slice())
+                    .await
+                    .map_err(PMSClientError::FailedWriteMsg)?;
+            }
+        }
+    }
+}
+
+async fn send_size(send_channel: &UnboundedSender<ProcInput>) -> Result<(), PMSClientError> {
+    if let Ok((w, h)) = size() {
+        let msg = ProcInput {
+            input: Some(Input::Size(Size {
+                w: w as u32,
+                h: h as u32,
+            })),
+        };
+        send_channel
+            .send(msg)
+            .map_err(PMSClientError::FailedQueueMsg)?;
+    }
+    Ok(())
+}
+async fn handle_signals(
+    mut signals: Signals,
+    send_channel: &UnboundedSender<ProcInput>,
+) -> Result<(), PMSClientError> {
+    send_size(send_channel).await?;
+
+    while let Some(signal) = signals.next().await {
+        match signal {
+            SIGWINCH => {
+                send_size(send_channel).await?;
+            }
+            _ => unreachable!(),
+        }
+    }
+    unreachable!()
 }
 
 async fn handle_stdout(r: &mut ReadHalf<'_>) -> Result<(), PMSClientError> {
@@ -64,31 +138,10 @@ async fn handle_stdout(r: &mut ReadHalf<'_>) -> Result<(), PMSClientError> {
     }
 }
 
-async fn send_msg<T: AsyncReadExt + Unpin>(
-    sock: &mut WriteHalf<'_>,
-    msg: &ProcInput,
-) -> Result<(), PMSClientError> {
-    sock.write_u32(msg.encoded_len() as u32)
-        .await
-        .map_err(PMSClientError::FailedWriteMsgLength)?;
-    sock.write_all(msg.encode_to_vec().as_slice())
-        .await
-        .map_err(PMSClientError::FailedWriteMsg)
-}
-
 async fn handle_stdin<T: AsyncReadExt + Unpin>(
-    sock: &mut WriteHalf<'_>,
     input: &mut T,
+    send_channel: &UnboundedSender<ProcInput>,
 ) -> Result<(), PMSClientError> {
-    if let Ok((w, h)) = size() {
-        let msg = ProcInput {
-            input: Some(Input::Size(Size {
-                w: w as u32,
-                h: h as u32,
-            })),
-        };
-        send_msg::<T>(sock, &msg).await?;
-    }
     loop {
         let mut buf = [0; 1024];
         let len = match input.read(&mut buf).await {
@@ -109,6 +162,8 @@ async fn handle_stdin<T: AsyncReadExt + Unpin>(
         let msg = ProcInput {
             input: Some(Data(buf[..len].to_vec())),
         };
-        send_msg::<T>(sock, &msg).await?;
+        send_channel
+            .send(msg)
+            .map_err(PMSClientError::FailedQueueMsg)?;
     }
 }

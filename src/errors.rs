@@ -19,6 +19,10 @@ pub enum PMSClientError {
     FailedWriteStdout(std::io::Error),
     #[error("Failed to connect - {0}")]
     FailedConnect(std::io::Error),
+    #[error("Failed add msg to queue - {0}")]
+    FailedQueueMsg(SendError<ProcInput>),
+    #[error("Failed setup signal handler - {0}")]
+    FailedSignalHandler(std::io::Error),
 }
 
 #[derive(Error, Debug)]
