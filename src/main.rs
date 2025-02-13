@@ -125,13 +125,18 @@ async fn main() {
         // run_process(&tag, &args.cmd.unwrap()).await.unwrap();
     }
 
-    crossterm::terminal::enable_raw_mode().unwrap();
+    if let Err(e) = crossterm::terminal::enable_raw_mode() {
+        println!("Failed to enable raw mode: {e}");
+        exit(1);
+    }
 
     // console_subscriber::init();
 
-    connect_process(&tag, &mut stdin()).await.unwrap();
+    if let Err(e) = connect_process(&tag, &mut stdin()).await {
+        println!("Connection failed: {e}");
+    };
 
-    exit(0);
+    crossterm::terminal::disable_raw_mode().unwrap();
 }
 
 #[cfg(test)]
