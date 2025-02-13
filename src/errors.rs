@@ -50,9 +50,5 @@ pub enum PMSServerError {
     #[error("TODO")]
     OutputFailedToRead,
     #[error("TODO")]
-    FailedAcceptConnection(std::io::Error),
-    #[error("TODO")]
     FailedCreatePTY(pty_process::Error),
-    #[error("TODO")]
-    FailedToWaitForChild(std::io::Error),
 }

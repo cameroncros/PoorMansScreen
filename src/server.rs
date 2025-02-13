@@ -5,7 +5,7 @@ use crate::messages::{ProcInput, ProcOutput};
 use crate::socket_path;
 use prost::Message;
 use std::path::Path;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::{ReadHalf, WriteHalf};
 use tokio::net::UnixListener;
 use tokio::select;
@@ -123,7 +123,7 @@ async fn handle_connections(
     }
 }
 
-async fn write_stdin<T: AsyncWrite + Unpin>(
+async fn write_stdin<T: AsyncWriteExt + Unpin>(
     inputs: &mut UnboundedReceiver<ProcInput>,
     proc_stdin: &mut T,
 ) -> Result<(), PMSServerError> {
@@ -132,13 +132,14 @@ async fn write_stdin<T: AsyncWrite + Unpin>(
             None => {}
             Some(data) => match data {
                 Data(data) => {
+                    debug!("Input: [{:#?}]", data);
                     proc_stdin
                         .write_all(&data)
                         .await
                         .map_err(PMSServerError::InputFailedToWrite)?;
                 }
-                Input::Signal(_) => {
-                    debug!("Got signalled");
+                Input::Signal(signal) => {
+                    debug!("Got signalled - {signal}");
                     todo!();
                 }
             },
@@ -147,7 +148,7 @@ async fn write_stdin<T: AsyncWrite + Unpin>(
     Ok(())
 }
 
-async fn read_stdout<T: AsyncRead + Unpin>(
+async fn read_stdout<T: AsyncReadExt + Unpin>(
     input: &mut T,
     output: &mut UnboundedSender<ProcOutput>,
 ) -> Result<(), PMSServerError> {
@@ -159,6 +160,7 @@ async fn read_stdout<T: AsyncRead + Unpin>(
         let msg = ProcOutput {
             stdout: buf[..len].to_vec(),
         };
+        debug!("Output: [{:#?}]", buf[..len].to_vec());
         output
             .send(msg)
             .map_err(PMSServerError::OutputFailedToSend)?;

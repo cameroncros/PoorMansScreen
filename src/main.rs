@@ -125,6 +125,8 @@ async fn main() {
         // run_process(&tag, &args.cmd.unwrap()).await.unwrap();
     }
 
+    crossterm::terminal::enable_raw_mode().unwrap();
+
     // console_subscriber::init();
 
     connect_process(&tag, &mut stdin()).await.unwrap();

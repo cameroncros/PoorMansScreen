@@ -40,6 +40,8 @@ pub(crate) async fn connect_process<T: AsyncRead + Unpin>(
 }
 
 async fn handle_stdout(r: &mut ReadHalf<'_>) -> Result<(), PMSClientError> {
+    let mut output = stdout();
+
     loop {
         let Ok(len) = r.read_u32().await else {
             return Ok(());
@@ -50,19 +52,22 @@ async fn handle_stdout(r: &mut ReadHalf<'_>) -> Result<(), PMSClientError> {
             .map_err(PMSClientError::FailedReadMsg)?;
 
         let msg = ProcOutput::decode(&*buf).map_err(PMSClientError::OutputFailedToDecode)?;
-        stdout()
+
+        output
             .write_all(&msg.stdout)
             .await
             .map_err(PMSClientError::FailedWriteStdout)?;
+
+        output.flush().await.unwrap();
     }
 }
 
-async fn handle_stdin<T: AsyncRead + Unpin>(
+async fn handle_stdin<T: AsyncReadExt + Unpin>(
     sock: &mut WriteHalf<'_>,
     input: &mut T,
 ) -> Result<(), PMSClientError> {
     loop {
-        let mut buf = vec![0; 1024];
+        let mut buf = [0; 1024];
         let len = match input.read(&mut buf).await {
             Ok(len) => len,
             Err(e) => match e.kind() {
@@ -73,6 +78,9 @@ async fn handle_stdin<T: AsyncRead + Unpin>(
             },
         };
         if len == 0 {
+            return Ok(());
+        }
+        if len == 1 && buf[0] == 0x03 {
             return Ok(());
         }
         let msg = ProcInput {
