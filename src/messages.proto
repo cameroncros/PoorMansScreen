@@ -5,9 +5,15 @@ message ProcOutput {
   bytes stdout = 1;
 }
 
+message Size {
+  uint32 w = 1;
+  uint32 h = 2;
+}
+
 message ProcInput {
   oneof input {
     bytes data = 1;
     uint32 signal = 2;
+    Size size = 3;
   }
 }

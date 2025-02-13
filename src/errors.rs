@@ -51,4 +51,6 @@ pub enum PMSServerError {
     OutputFailedToRead,
     #[error("Failed to create PTY - {0}")]
     FailedCreatePTY(pty_process::Error),
+    #[error("Failed to resize PTY - {0}")]
+    FailedToResize(pty_process::Error),
 }

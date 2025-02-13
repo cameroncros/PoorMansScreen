@@ -1,7 +1,9 @@
 use crate::errors::PMSClientError;
+use crate::messages::proc_input::Input;
 use crate::messages::proc_input::Input::Data;
-use crate::messages::{ProcInput, ProcOutput};
+use crate::messages::{ProcInput, ProcOutput, Size};
 use crate::socket_path;
+use crossterm::terminal::size;
 use prost::Message;
 use std::io;
 use std::path::Path;
@@ -62,10 +64,31 @@ async fn handle_stdout(r: &mut ReadHalf<'_>) -> Result<(), PMSClientError> {
     }
 }
 
+async fn send_msg<T: AsyncReadExt + Unpin>(
+    sock: &mut WriteHalf<'_>,
+    msg: &ProcInput,
+) -> Result<(), PMSClientError> {
+    sock.write_u32(msg.encoded_len() as u32)
+        .await
+        .map_err(PMSClientError::FailedWriteMsgLength)?;
+    sock.write_all(msg.encode_to_vec().as_slice())
+        .await
+        .map_err(PMSClientError::FailedWriteMsg)
+}
+
 async fn handle_stdin<T: AsyncReadExt + Unpin>(
     sock: &mut WriteHalf<'_>,
     input: &mut T,
 ) -> Result<(), PMSClientError> {
+    if let Ok((w, h)) = size() {
+        let msg = ProcInput {
+            input: Some(Input::Size(Size {
+                w: w as u32,
+                h: h as u32,
+            })),
+        };
+        send_msg::<T>(sock, &msg).await?;
+    }
     loop {
         let mut buf = [0; 1024];
         let len = match input.read(&mut buf).await {
@@ -86,11 +109,6 @@ async fn handle_stdin<T: AsyncReadExt + Unpin>(
         let msg = ProcInput {
             input: Some(Data(buf[..len].to_vec())),
         };
-        sock.write_u32(msg.encoded_len() as u32)
-            .await
-            .map_err(PMSClientError::FailedWriteMsgLength)?;
-        sock.write_all(msg.encode_to_vec().as_slice())
-            .await
-            .map_err(PMSClientError::FailedWriteMsg)?;
+        send_msg::<T>(sock, &msg).await?;
     }
 }

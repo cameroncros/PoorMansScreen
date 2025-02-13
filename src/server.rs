@@ -1,9 +1,10 @@
 use crate::errors::PMSServerError;
 use crate::messages::proc_input::Input;
-use crate::messages::proc_input::Input::Data;
+use crate::messages::proc_input::Input::{Data, Size};
 use crate::messages::{ProcInput, ProcOutput};
 use crate::socket_path;
 use prost::Message;
+use pty_process::{ReadPty, WritePty};
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::{ReadHalf, WriteHalf};
@@ -123,9 +124,9 @@ async fn handle_connections(
     }
 }
 
-async fn write_stdin<T: AsyncWriteExt + Unpin>(
+async fn write_stdin(
     inputs: &mut UnboundedReceiver<ProcInput>,
-    proc_stdin: &mut T,
+    proc_stdin: &mut WritePty<'_>,
 ) -> Result<(), PMSServerError> {
     while let Some(msg) = inputs.recv().await {
         match msg.input {
@@ -138,6 +139,11 @@ async fn write_stdin<T: AsyncWriteExt + Unpin>(
                         .await
                         .map_err(PMSServerError::InputFailedToWrite)?;
                 }
+                Size(size) => {
+                    proc_stdin
+                        .resize(pty_process::Size::new(size.h as u16, size.w as u16))
+                        .map_err(PMSServerError::FailedToResize)?;
+                }
                 Input::Signal(signal) => {
                     debug!("Got signalled - {signal}");
                     todo!();
@@ -148,8 +154,8 @@ async fn write_stdin<T: AsyncWriteExt + Unpin>(
     Ok(())
 }
 
-async fn read_stdout<T: AsyncReadExt + Unpin>(
-    input: &mut T,
+async fn read_stdout(
+    input: &mut ReadPty<'_>,
     output: &mut UnboundedSender<ProcOutput>,
 ) -> Result<(), PMSServerError> {
     let mut buf = vec![0; 1024];
