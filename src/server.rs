@@ -10,7 +10,7 @@ use tokio::net::unix::{ReadHalf, WriteHalf};
 use tokio::net::UnixListener;
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tracing::debug;
+use tracing::{debug, trace};
 
 pub(crate) async fn run_process(label: &str, cmd: &[String]) -> Result<(), PMSServerError> {
     let socket_path = socket_path(label);
@@ -132,7 +132,7 @@ async fn write_stdin<T: AsyncWriteExt + Unpin>(
             None => {}
             Some(data) => match data {
                 Data(data) => {
-                    debug!("Input: [{:#?}]", data);
+                    trace!("Input: [{:#?}]", data);
                     proc_stdin
                         .write_all(&data)
                         .await
@@ -160,7 +160,7 @@ async fn read_stdout<T: AsyncReadExt + Unpin>(
         let msg = ProcOutput {
             stdout: buf[..len].to_vec(),
         };
-        debug!("Output: [{:#?}]", buf[..len].to_vec());
+        trace!("Output: [{:#?}]", buf[..len].to_vec());
         output
             .send(msg)
             .map_err(PMSServerError::OutputFailedToSend)?;
