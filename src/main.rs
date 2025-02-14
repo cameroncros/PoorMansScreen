@@ -16,9 +16,10 @@ use std::process::{exit, Command};
 use std::time::Duration;
 use tokio::io::stdin;
 use tokio::time::sleep;
-use tracing::debug;
+use tracing::metadata::LevelFilter;
+use tracing::{debug, Level};
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::{fmt, Registry};
+use tracing_subscriber::{fmt, Layer, Registry};
 
 #[derive(Parser, Debug)]
 #[command(version, about, trailing_var_arg = true)]
@@ -97,7 +98,9 @@ fn setup_logging() {
         .unwrap();
     let subscriber = Registry::default().with(
         // log-debug file, to log the debug
-        fmt::layer().with_writer(debug_file),
+        fmt::layer()
+            .with_writer(debug_file)
+            .with_filter(LevelFilter::from(Level::DEBUG)),
     );
 
     tracing::subscriber::set_global_default(subscriber).unwrap();

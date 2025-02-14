@@ -144,9 +144,13 @@ async fn write_stdin(
                         .resize(pty_process::Size::new(size.h as u16, size.w as u16))
                         .map_err(PMSServerError::FailedToResize)?;
                 }
-                Input::Signal(signal) => {
-                    debug!("Got signalled - {signal}");
-                    todo!();
+                Input::Signal(s) => {
+                    debug!("Got signalled - {s}");
+                    // let sig =
+                    //     Signal::try_from(s as i32).map_err(PMSServerError::FailedToParseSignal)?;
+                    // let cpid = Pid::from_raw(child_pid as pid_t);
+                    // let pgid = getpgid(cpid).unwrap();
+                    // killpg(pgid, sig).map_err(PMSServerError::FailedToSignalChild)?;
                 }
             },
         }

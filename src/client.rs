@@ -29,7 +29,8 @@ pub(crate) async fn connect_process<T: AsyncRead + Unpin>(
         .await
         .map_err(PMSClientError::FailedConnect)?;
 
-    let signals = Signals::new(&[SIGWINCH]).map_err(PMSClientError::FailedSignalHandler)?;
+    let signals = Signals::new(vec![SIGWINCH, SIGINT, SIGTERM])
+        .map_err(PMSClientError::FailedSignalHandler)?;
     let handle = signals.handle();
 
     let (mut r, mut w) = stream.split();
@@ -98,6 +99,31 @@ async fn send_size(send_channel: &UnboundedSender<ProcInput>) -> Result<(), PMSC
     }
     Ok(())
 }
+
+async fn send_signal(
+    send_channel: &UnboundedSender<ProcInput>,
+    signal: u32,
+) -> Result<(), PMSClientError> {
+    let msg = ProcInput {
+        input: Some(Input::Signal(signal)),
+    };
+    send_channel
+        .send(msg)
+        .map_err(PMSClientError::FailedQueueMsg)
+}
+
+async fn send_data(
+    send_channel: &UnboundedSender<ProcInput>,
+    data: &[u8],
+) -> Result<(), PMSClientError> {
+    let msg = ProcInput {
+        input: Some(Data(data.to_vec())),
+    };
+    send_channel
+        .send(msg)
+        .map_err(PMSClientError::FailedQueueMsg)
+}
+
 async fn handle_signals(
     mut signals: Signals,
     send_channel: &UnboundedSender<ProcInput>,
@@ -108,6 +134,13 @@ async fn handle_signals(
         match signal {
             SIGWINCH => {
                 send_size(send_channel).await?;
+            }
+            SIGINT => {
+                send_signal(send_channel, SIGINT as u32).await?;
+                send_data(send_channel, &[0x03u8]).await?;
+            }
+            SIGTERM => {
+                send_signal(send_channel, SIGTERM as u32).await?;
             }
             _ => unreachable!(),
         }
@@ -142,6 +175,7 @@ async fn handle_stdin<T: AsyncReadExt + Unpin>(
     input: &mut T,
     send_channel: &UnboundedSender<ProcInput>,
 ) -> Result<(), PMSClientError> {
+    let mut sup = false;
     loop {
         let mut buf = [0; 1024];
         let len = match input.read(&mut buf).await {
@@ -156,14 +190,27 @@ async fn handle_stdin<T: AsyncReadExt + Unpin>(
         if len == 0 {
             return Ok(());
         }
-        if len == 1 && buf[0] == 0x03 {
-            return Ok(());
+        if len == 1 {
+            match buf[0] {
+                0x01 => {
+                    // Ctrl-A
+                    sup = true;
+                    continue;
+                }
+                0x03 => {
+                    if !sup {
+                        send_signal(send_channel, SIGINT as u32).await?;
+                        send_data(send_channel, &[0x03u8]).await?;
+                        continue;
+                    } else {
+                        return Ok(());
+                    }
+                }
+                _ => {}
+            }
         }
-        let msg = ProcInput {
-            input: Some(Data(buf[..len].to_vec())),
-        };
-        send_channel
-            .send(msg)
-            .map_err(PMSClientError::FailedQueueMsg)?;
+        sup = false;
+
+        send_data(send_channel, &buf[..len]).await?;
     }
 }
