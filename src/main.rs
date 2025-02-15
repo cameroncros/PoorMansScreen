@@ -108,6 +108,10 @@ fn setup_logging() {
 
 #[tokio::main]
 async fn main() {
+    if env::var("PMS_LOGGING").is_ok() {
+        setup_logging();
+    }
+
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(_) => {
@@ -122,7 +126,6 @@ async fn main() {
     let tag = args.tag.clone();
 
     if args.cmd.is_some() {
-        setup_logging();
         let cmdline = env::args().collect::<Vec<String>>();
         fork_and_run(&cmdline, &args).await;
         // run_process(&tag, &args.cmd.unwrap()).await.unwrap();

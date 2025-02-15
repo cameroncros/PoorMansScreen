@@ -5,12 +5,15 @@ use crate::messages::{ProcInput, ProcOutput};
 use crate::socket_path;
 use prost::Message;
 use pty_process::{ReadPty, WritePty};
+use ring_channel::{ring_channel, RingReceiver, RingSender, TryRecvError};
+use std::num::NonZero;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::{ReadHalf, WriteHalf};
 use tokio::net::UnixListener;
 use tokio::select;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::task::yield_now;
 use tracing::{debug, trace};
 
 pub(crate) async fn run_process(label: &str, cmd: &[String]) -> Result<(), PMSServerError> {
@@ -37,7 +40,7 @@ pub(crate) async fn run_process(label: &str, cmd: &[String]) -> Result<(), PMSSe
 
     let (mut child_stdout, mut child_stdin) = pty.split();
 
-    let (mut o_s, mut o_r) = unbounded_channel();
+    let (mut o_s, mut o_r) = ring_channel::<ProcOutput>(NonZero::new(100000).unwrap());
     let (mut i_s, mut i_r) = unbounded_channel();
 
     select! {
@@ -66,10 +69,23 @@ pub(crate) async fn run_process(label: &str, cmd: &[String]) -> Result<(), PMSSe
 }
 
 async fn sender(
-    o_r: &mut UnboundedReceiver<ProcOutput>,
+    o_r: &mut RingReceiver<ProcOutput>,
     s: &mut WriteHalf<'_>,
 ) -> Result<(), PMSServerError> {
-    while let Some(output) = o_r.recv().await {
+    loop {
+        let output = match o_r.try_recv() {
+            Ok(m) => m,
+            Err(e) => match e {
+                TryRecvError::Empty => {
+                    yield_now().await;
+                    continue;
+                }
+                TryRecvError::Disconnected => {
+                    debug!("Sender closed - disconnected");
+                    return Ok(());
+                }
+            },
+        };
         let bytes = output.encode_to_vec();
         s.write_u32(bytes.len() as u32)
             .await
@@ -78,7 +94,6 @@ async fn sender(
             .await
             .map_err(PMSServerError::FailedWriteMsg)?;
     }
-    Ok(())
 }
 
 async fn receiver(
@@ -101,7 +116,7 @@ async fn receiver(
 
 async fn handle_connections(
     stream: &UnixListener,
-    o_r: &mut UnboundedReceiver<ProcOutput>,
+    o_r: &mut RingReceiver<ProcOutput>,
     i_s: &mut UnboundedSender<ProcInput>,
 ) -> Result<(), PMSServerError> {
     loop {
@@ -160,7 +175,7 @@ async fn write_stdin(
 
 async fn read_stdout(
     input: &mut ReadPty<'_>,
-    output: &mut UnboundedSender<ProcOutput>,
+    output: &mut RingSender<ProcOutput>,
 ) -> Result<(), PMSServerError> {
     let mut buf = vec![0; 1024];
     while let Ok(len) = input.read(&mut buf).await {

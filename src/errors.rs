@@ -46,11 +46,11 @@ pub enum PMSServerError {
     #[error("Failed to decode input msg - {0}")]
     InputDecodeError(DecodeError),
     #[error("Failed to send input to process- {0}")]
-    InputFailedToSend(#[from] SendError<ProcInput>),
+    InputFailedToSend(SendError<ProcInput>),
     #[error("Failed to write to stdin - {0}")]
     InputFailedToWrite(std::io::Error),
     #[error("Failed to send output to host - {0}")]
-    OutputFailedToSend(SendError<ProcOutput>),
+    OutputFailedToSend(ring_channel::SendError<ProcOutput>),
     #[error("Failed to read from stdout/stderr")]
     OutputFailedToRead,
     #[error("Failed to create PTY - {0}")]
