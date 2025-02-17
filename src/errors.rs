@@ -23,6 +23,8 @@ pub enum PMSClientError {
     FailedQueueMsg(SendError<ProcInput>),
     #[error("Failed setup signal handler - {0}")]
     FailedSignalHandler(std::io::Error),
+    #[error("Failed flush to stdout - {0}")]
+    FailedFlushStdout(std::io::Error),
 }
 
 #[derive(Error, Debug)]
@@ -57,4 +59,6 @@ pub enum PMSServerError {
     FailedCreatePTY(pty_process::Error),
     #[error("Failed to resize PTY - {0}")]
     FailedToResize(pty_process::Error),
+    #[error("Failed to extract exe from cmd")]
+    InvalidExe,
 }

@@ -20,11 +20,12 @@ pub(crate) async fn run_process(label: &str, cmd: &[String]) -> Result<(), PMSSe
     let socket_path = socket_path(label);
     let socket = Path::new(socket_path.as_str());
     if socket.exists() {
-        // std::fs::remove_file(socket).unwrap();
         return Err(PMSServerError::SocketAlreadyInUse);
     }
     let stream = UnixListener::bind(socket).map_err(PMSServerError::FailedToBind)?;
-    let exe = cmd.first().unwrap();
+    let Some(exe) = cmd.first() else {
+        return Err(PMSServerError::InvalidExe);
+    };
     let args = &cmd[1..];
     let command = if args.is_empty() {
         pty_process::Command::new(exe)
@@ -32,7 +33,8 @@ pub(crate) async fn run_process(label: &str, cmd: &[String]) -> Result<(), PMSSe
         pty_process::Command::new(exe).args(args)
     };
     let (mut pty, pts) = pty_process::open().map_err(PMSServerError::FailedCreatePTY)?;
-    pty.resize(pty_process::Size::new(24, 80)).unwrap();
+    pty.resize(pty_process::Size::new(24, 80))
+        .map_err(PMSServerError::FailedToResize)?;
 
     let mut child = command
         .spawn(pts)

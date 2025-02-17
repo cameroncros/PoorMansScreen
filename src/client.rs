@@ -167,7 +167,10 @@ async fn handle_stdout(r: &mut ReadHalf<'_>) -> Result<(), PMSClientError> {
             .await
             .map_err(PMSClientError::FailedWriteStdout)?;
 
-        output.flush().await.unwrap();
+        output
+            .flush()
+            .await
+            .map_err(PMSClientError::FailedFlushStdout)?;
     }
 }
 

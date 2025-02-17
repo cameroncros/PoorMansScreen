@@ -17,7 +17,7 @@ use std::time::Duration;
 use tokio::io::stdin;
 use tokio::time::sleep;
 use tracing::metadata::LevelFilter;
-use tracing::{debug, Level};
+use tracing::{debug, error, Level};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{fmt, Layer, Registry};
 
@@ -73,17 +73,40 @@ async fn fork_and_run(cmdline: &[String], args: &Args) {
 
     if stage == 0 {
         debug!("Spawned stage 1");
-        let _ = cmd.spawn().unwrap().wait().unwrap();
-        debug!("Stage 1 exited");
-        wait_for_socket(&args.tag.clone(), 5).await;
+        match cmd.spawn() {
+            Ok(mut child) => match child.wait() {
+                Ok(_) => {
+                    debug!("Stage 1 exited");
+                    wait_for_socket(&args.tag.clone(), 5).await;
+                }
+                Err(e) => {
+                    debug!("Failed to wait for child process - {e}");
+                }
+            },
+            Err(e) => {
+                debug!("Failed to spawn child process - {e}");
+            }
+        }
     } else if stage == 1 {
-        let _ = cmd.spawn().unwrap();
-        debug!("Spawned stage 2, exiting");
-        exit(0);
+        if let Err(e) = cmd.spawn() {
+            error!("Failed to spawn process: {e}");
+            exit(1);
+        } else {
+            debug!("Spawned stage 2, exiting");
+            exit(0);
+        }
     } else if stage == 2 {
         debug!("Executing command");
-        if let Err(e) = run_process(&args.tag, &args.cmd.clone().unwrap()).await {
+        let cmd = match args.cmd.clone() {
+            None => {
+                debug!("Invalid cmd");
+                exit(1);
+            }
+            Some(c) => c,
+        };
+        if let Err(e) = run_process(&args.tag, &cmd).await {
             debug!("Process exited with error: {}", e);
+            exit(2)
         };
         debug!("Process exited");
         exit(0);
@@ -128,15 +151,12 @@ async fn main() {
     if args.cmd.is_some() {
         let cmdline = env::args().collect::<Vec<String>>();
         fork_and_run(&cmdline, &args).await;
-        // run_process(&tag, &args.cmd.unwrap()).await.unwrap();
     }
 
     if let Err(e) = crossterm::terminal::enable_raw_mode() {
         println!("Failed to enable raw mode: {e}");
         exit(1);
     }
-
-    // console_subscriber::init();
 
     if let Err(e) = connect_process(&tag, &mut stdin()).await {
         println!("Connection failed: {e}");
