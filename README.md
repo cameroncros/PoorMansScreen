@@ -23,10 +23,11 @@ The server part will double-fork (double Command?) itself to daemonise a process
 That process will then create a Unix socket, for connections to the Client,
 and then create a PTY (`/tmp/label`) and execute the given child process `bash -i`.
 The server will wire the unix socket and pty together, so that STDIN/STDOUT/STDERR
-are sent over the unix socket/
+are sent over the unix socket.
 
-When run in server mode, the initial executable
-will automatically connect to the server via the client half.
+When run in server mode, the main process
+will automatically connect to the server via the client half,
+after it forks off the server.
 
 Client
 ------
@@ -35,7 +36,7 @@ Client
 pms label
 ```
 
-The server portion will connect to the Unix socket created by the server portion (`/tmp/label`).
+The client portion will connect to the Unix socket created by the server portion (`/tmp/label`).
 It will wire that connection up to STDIN/STDOUT of the current terminal,
 which allows inputs to be sent to the child, and outputs to be displayed.
 
